@@ -1,0 +1,16 @@
+# Large files to ignore (prevents GitHub push errors)
+model/
+*.pth
+*.db
+
+# Python/FastAPI environment files
+__pycache__/
+*.pyc
+.env
+smartagro_venv/
+venv/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
