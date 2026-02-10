@@ -15,4 +15,4 @@ jobs:
       - name: Push to Hugging Face
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://FlameTS:$HF_TOKEN@huggingface.co/spaces/FlameTS/smart-agro-api main
+        run: git push --force https://Tarman21:$HF_TOKEN@huggingface.co/spaces/Tarman21/smart-agro-api main
