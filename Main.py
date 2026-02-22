@@ -4,6 +4,11 @@
 
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+from pytorch_grad_cam.utils.image import show_cam_on_image
+import cv2
+import base64
 
 
 import torch
@@ -65,6 +70,9 @@ model = CropDiseaseCNN(num_classes=len(class_names))
 model.load_state_dict(checkpoint["model_state"])
 model.to(device)
 model.eval()
+
+target_layer = model.features[6]
+cam = GradCAM(model=model, target_layers=[target_layer])
 
 print("Model loaded successfully")
 
@@ -134,6 +142,30 @@ async def predict(file: UploadFile = File(...)):
         crop, disease = predicted_label.split("___")
 
         # --------------------------
+        # Grad-CAM Generation
+        # --------------------------
+
+        targets = [ClassifierOutputTarget(max_index.item())]
+
+        model.zero_grad()
+        grayscale_cam = cam(input_tensor=image, targets=targets)
+        heatmap = grayscale_cam[0]
+
+        # Convert PIL image to OpenCV format
+        original_image = np.array(pil_image)
+        original_image = cv2.resize(original_image, (224, 224))
+
+        rgb_img = original_image.astype(np.float32) / 255.0
+        heatmap = cv2.resize(heatmap, (224, 224))
+
+        visualization = show_cam_on_image(rgb_img, heatmap, use_rgb=True)
+
+        # Convert to base64
+        _, buffer = cv2.imencode(".jpg", cv2.cvtColor(visualization, cv2.COLOR_RGB2BGR))
+        gradcam_base64 = base64.b64encode(buffer).decode("utf-8")
+
+
+        # --------------------------
         # Database lookup
         # --------------------------
         conn = get_connection()
@@ -165,7 +197,8 @@ async def predict(file: UploadFile = File(...)):
             "confidence": confidence,   # 0–1 ONLY
             "crop_info": crop_info[0] if crop_info else "Information not available",
             "disease_info": disease_data[0] if disease_data else None,
-            "cure": disease_data[1] if disease_data else None
+            "cure": disease_data[1] if disease_data else None,
+            "gradcam_image": gradcam_base64
         }
 
     except Exception as e:
