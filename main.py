@@ -27,6 +27,8 @@ from model.model_def import CropDiseaseCNN
 
 import numpy as np
 
+from huggingface_hub import hf_hub_download
+
 # ------------------------------
 # Supabase client
 # ------------------------------
@@ -78,10 +80,12 @@ print("Using device:", device)
 # ------------------------------
 # Load model ONCE
 # ------------------------------
-checkpoint = torch.load(
-    "model/crop_disease_model.pth",
-    map_location=device
+model_path = hf_hub_download(
+    repo_id="Tarman21/smart-agro-model-v1",
+    filename="crop_disease_model.pth"
 )
+
+checkpoint = torch.load(model_path, map_location=device)
 
 class_names = checkpoint["class_names"]
 
