@@ -14,3 +14,6 @@ venv/
 # IDE files
 .vscode/
 .idea/
+
+model_details&Creation/
+*.png
