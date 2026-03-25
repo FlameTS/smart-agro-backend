@@ -21,7 +21,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY --chown=user . .
 COPY model/ ./model/
-COPY DB/ ./DB/
+
+# Supabase env vars (override at runtime)
+ENV SUPABASE_URL=""
+ENV SUPABASE_ANON_KEY=""
 
 EXPOSE 7860
 

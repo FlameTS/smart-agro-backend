@@ -2,193 +2,31 @@
 """
 smart_agro_db.py
 
-Standalone SQLite3 database backbone for Smart Agro project.
+Supabase-backed database module for Smart Agro project.
 
-- Creates smart_agro.db
-- Auto-populates crops & diseases from dataset labels (including healthy entries)
+- Uses Supabase REST API via supabase-py
 - Provides functions to add/delete/list/search crops & diseases
-- Does NOT include interpret_prediction (left for later / separate file)
+- Schema and seed data are managed in Supabase (no local init needed)
 
 Usage:
-    python smart_agro_db.py   # runs CLI to test functions and will init+populate DB
+    python smart_agro_db.py   # runs CLI to test functions
 """
 
-import sqlite3
+import os
 from typing import List, Optional, Dict, Any
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
-DB_NAME = "smart_agro.db"
+load_dotenv()
 
-# -------------------------
-# Helper / Connection
-# -------------------------
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    return conn
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
-# -------------------------
-# Initialization
-# -------------------------
-def init_db():
-    """Create tables if they don't exist."""
-    conn = get_connection()
-    c = conn.cursor()
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_ANON_KEY must be set in .env")
 
-    # Crops table
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS crops (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            crop_name TEXT NOT NULL UNIQUE,
-            info TEXT
-        )
-    """)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-    # Diseases table; ensure a crop_id + disease_name pair is unique
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS diseases (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            crop_id INTEGER NOT NULL,
-            disease_name TEXT NOT NULL,
-            description TEXT,
-            cure TEXT,
-            FOREIGN KEY(crop_id) REFERENCES crops(id),
-            UNIQUE(crop_id, disease_name)
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-
-# -------------------------
-# Auto-populate dataset
-# -------------------------
-_LABELS = [
-"Apple___Apple_scab",
-"Apple___Black_rot",
-"Apple___Cedar_apple_rust",
-"Apple___healthy",
-"Blueberry___healthy",
-"Cherry_(including_sour)_healthy",
-"Cherry_(including_sour)_Powdery_mildew",
-"Corn_(maize)_Cercospora_leaf_spot_Gray_leaf_spot",
-"Corn_(maize)Common_rust",
-"Corn_(maize)_healthy",
-"Corn_(maize)_Northern_Leaf_Blight",
-"Grape___Black_rot",
-"Grape__Esca(Black_Measles)",
-"Grape___healthy",
-"Grape__Leaf_blight(Isariopsis_Leaf_Spot)",
-"Orange__Haunglongbing(Citrus_greening)",
-"Peach___Bacterial_spot",
-"Peach___healthy",
-"Pepper,bell__Bacterial_spot",
-"Pepper,bell__healthy",
-"Potato___Early_blight",
-"Potato___healthy",
-"Potato___Late_blight",
-"Raspberry___healthy",
-"Soybean___healthy",
-"Squash___Powdery_mildew",
-"Strawberry___healthy",
-"Strawberry___Leaf_scorch",
-"Tomato___Bacterial_spot",
-"Tomato___Early_blight",
-"Tomato___healthy",
-"Tomato___Late_blight",
-"Tomato___Leaf_Mold",
-"Tomato___Septoria_leaf_spot",
-"Tomato___Spider_mites_Two-spotted_spider_mite",
-"Tomato___Target_Spot",
-"Tomato___Tomato_mosaic_virus",
-"Tomato___Tomato_Yellow_Leaf_Curl_Virus"
-]
-
-def _normalize_label(label: str) -> (str, str):
-    """
-    Split label into (crop_name, disease_name).
-    If splitting rules are ambiguous, we keep the original label parts.
-    This function assumes the dataset mostly uses '___' to separate crop and disease,
-    but some labels in the provided list use different separators or none.
-    We will try several separators in order.
-    """
-    # Try common dataset separator first
-    if "___" in label:
-        parts = label.split("___", 1)
-        return parts[0].strip(), parts[1].strip()
-    # Try double underscore with one or two underscores
-    if "__" in label:
-        parts = label.split("__", 1)
-        return parts[0].strip(), parts[1].strip()
-    # Try single underscore between crop and disease (less reliable)
-    if "_" in label:
-        parts = label.split("_", 1)
-        return parts[0].strip(), parts[1].strip()
-    # Fallback: treat whole label as crop and disease unknown
-    return label.strip(), "unknown"
-
-def populate_from_labels(labels: List[str] = None):
-    """
-    Insert crops and diseases from given label list.
-    Now: **includes healthy entries** as disease rows as well.
-    """
-    if labels is None:
-        labels = _LABELS
-
-    conn = get_connection()
-    c = conn.cursor()
-
-    # default placeholders
-    default_crop_info = "Crop information will be added later."
-    default_disease_desc = "Details will be added later."
-    default_cure = "Treatment information will be added later."
-
-    # special healthy defaults (we will still insert them into diseases table)
-    healthy_description = "Plant appears healthy."
-    healthy_cure = "No treatment necessary."
-
-    for label in labels:
-        crop_name, disease_name = _normalize_label(label)
-
-        # normalize strings (store exactly as requested, but strip whitespace)
-        crop_name = crop_name.strip()
-        disease_name = disease_name.strip()
-
-        # ensure crop exists
-        c.execute("SELECT id FROM crops WHERE crop_name = ?", (crop_name,))
-        row = c.fetchone()
-        if not row:
-            try:
-                c.execute(
-                    "INSERT INTO crops (crop_name, info) VALUES (?, ?)",
-                    (crop_name, default_crop_info)
-                )
-                crop_id = c.lastrowid
-            except sqlite3.IntegrityError:
-                # race or concurrent insertion; fetch it
-                c.execute("SELECT id FROM crops WHERE crop_name = ?", (crop_name,))
-                crop_id = c.fetchone()["id"]
-        else:
-            crop_id = row["id"]
-
-        # Decide description/cure values
-        if disease_name.lower() == "healthy":
-            desc = healthy_description
-            cure = healthy_cure
-        else:
-            desc = default_disease_desc
-            cure = default_cure
-
-        # Insert disease (including healthy) - use INSERT OR IGNORE to prevent duplicates
-        try:
-            c.execute(
-                "INSERT OR IGNORE INTO diseases (crop_id, disease_name, description, cure) VALUES (?, ?, ?, ?)",
-                (crop_id, disease_name, desc, cure)
-            )
-        except sqlite3.IntegrityError:
-            pass  # ignore existing
-
-    conn.commit()
-    conn.close()
 
 # -------------------------
 # CRUD functions for crops
@@ -197,61 +35,50 @@ def add_crop(crop_name: str, info: Optional[str] = None) -> bool:
     """Return True if added, False if exists or failed."""
     if info is None:
         info = "Crop information will be added later."
-    conn = get_connection()
-    c = conn.cursor()
     try:
-        c.execute("INSERT INTO crops (crop_name, info) VALUES (?, ?)", (crop_name, info))
-        conn.commit()
+        supabase.table("crops").insert({
+            "crop_name": crop_name,
+            "info": info
+        }).execute()
         return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False
-    finally:
-        conn.close()
+
 
 def delete_crop(crop_name: str) -> bool:
     """
-    Delete a crop and its diseases. Return True if deleted, False if not found.
+    Delete a crop and its diseases (cascade handled by FK ON DELETE CASCADE).
+    Return True if deleted, False if not found.
     """
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT id FROM crops WHERE crop_name = ?", (crop_name,))
-    row = c.fetchone()
-    if not row:
-        conn.close()
+    # Check if crop exists first
+    result = supabase.table("crops").select("id").eq("crop_name", crop_name).execute()
+    if not result.data:
         return False
-    crop_id = row["id"]
-    c.execute("DELETE FROM diseases WHERE crop_id = ?", (crop_id,))
-    c.execute("DELETE FROM crops WHERE id = ?", (crop_id,))
-    conn.commit()
-    conn.close()
+    supabase.table("crops").delete().eq("crop_name", crop_name).execute()
     return True
 
+
 def update_crop_info(crop_name: str, new_info: str) -> bool:
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE crops SET info = ? WHERE crop_name = ?", (new_info, crop_name))
-    updated = c.rowcount
-    conn.commit()
-    conn.close()
-    return updated > 0
+    result = (
+        supabase.table("crops")
+        .update({"info": new_info, "updated_at": "now()"})
+        .eq("crop_name", crop_name)
+        .execute()
+    )
+    return len(result.data) > 0
+
 
 def get_crop_by_name(crop_name: str) -> Optional[Dict[str, Any]]:
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM crops WHERE crop_name = ?", (crop_name,))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return dict(row)
+    result = supabase.table("crops").select("*").eq("crop_name", crop_name).execute()
+    if result.data:
+        return result.data[0]
+    return None
+
 
 def list_crops() -> List[Dict[str, Any]]:
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM crops ORDER BY crop_name COLLATE NOCASE")
-    rows = c.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    result = supabase.table("crops").select("*").order("crop_name").execute()
+    return result.data
+
 
 # -------------------------
 # CRUD functions for diseases
@@ -265,44 +92,40 @@ def add_disease(crop_name: str, disease_name: str, description: Optional[str] = 
     if cure is None:
         cure = "Treatment information will be added later."
 
-    conn = get_connection()
-    c = conn.cursor()
-    # get crop id
-    c.execute("SELECT id FROM crops WHERE crop_name = ?", (crop_name,))
-    crop = c.fetchone()
-    if not crop:
-        conn.close()
+    # Get crop id
+    crop = supabase.table("crops").select("id").eq("crop_name", crop_name).execute()
+    if not crop.data:
         return False
-    crop_id = crop["id"]
+    crop_id = crop.data[0]["id"]
+
     try:
-        c.execute(
-            "INSERT INTO diseases (crop_id, disease_name, description, cure) VALUES (?, ?, ?, ?)",
-            (crop_id, disease_name, description, cure)
-        )
-        conn.commit()
+        supabase.table("diseases").insert({
+            "crop_id": crop_id,
+            "disease_name": disease_name,
+            "description": description,
+            "cure": cure
+        }).execute()
         return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False
-    finally:
-        conn.close()
+
 
 def delete_disease(crop_name: str, disease_name: str) -> bool:
     """
     Delete a disease under a crop. Return True if deleted, False if not found.
     """
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT id FROM crops WHERE crop_name = ?", (crop_name,))
-    crop = c.fetchone()
-    if not crop:
-        conn.close()
+    crop = supabase.table("crops").select("id").eq("crop_name", crop_name).execute()
+    if not crop.data:
         return False
-    crop_id = crop["id"]
-    c.execute("DELETE FROM diseases WHERE crop_id = ? AND disease_name = ?", (crop_id, disease_name))
-    deleted = c.rowcount
-    conn.commit()
-    conn.close()
-    return deleted > 0
+    crop_id = crop.data[0]["id"]
+
+    result = supabase.table("diseases").select("id").eq("crop_id", crop_id).eq("disease_name", disease_name).execute()
+    if not result.data:
+        return False
+
+    supabase.table("diseases").delete().eq("crop_id", crop_id).eq("disease_name", disease_name).execute()
+    return True
+
 
 def update_disease(crop_name: str, disease_name: str, description: Optional[str] = None, cure: Optional[str] = None) -> bool:
     """
@@ -310,99 +133,116 @@ def update_disease(crop_name: str, disease_name: str, description: Optional[str]
     """
     if description is None and cure is None:
         return False
-    conn = get_connection()
-    c = conn.cursor()
-    # join to find correct disease id
-    c.execute("""
-        UPDATE diseases
-        SET description = COALESCE(?, description),
-            cure = COALESCE(?, cure)
-        WHERE id IN (
-            SELECT d.id FROM diseases d
-            JOIN crops c ON d.crop_id = c.id
-            WHERE c.crop_name = ? AND d.disease_name = ?
-        )
-    """, (description, cure, crop_name, disease_name))
-    updated = c.rowcount
-    conn.commit()
-    conn.close()
-    return updated > 0
+
+    crop = supabase.table("crops").select("id").eq("crop_name", crop_name).execute()
+    if not crop.data:
+        return False
+    crop_id = crop.data[0]["id"]
+
+    update_data = {}
+    if description is not None:
+        update_data["description"] = description
+    if cure is not None:
+        update_data["cure"] = cure
+    update_data["updated_at"] = "now()"
+
+    result = (
+        supabase.table("diseases")
+        .update(update_data)
+        .eq("crop_id", crop_id)
+        .eq("disease_name", disease_name)
+        .execute()
+    )
+    return len(result.data) > 0
+
 
 def get_diseases_by_crop(crop_name: str) -> List[Dict[str, Any]]:
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        SELECT d.* FROM diseases d
-        JOIN crops c ON d.crop_id = c.id
-        WHERE c.crop_name = ?
-        ORDER BY d.disease_name COLLATE NOCASE
-    """, (crop_name,))
-    rows = c.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    crop = supabase.table("crops").select("id").eq("crop_name", crop_name).execute()
+    if not crop.data:
+        return []
+    crop_id = crop.data[0]["id"]
+
+    result = (
+        supabase.table("diseases")
+        .select("*")
+        .eq("crop_id", crop_id)
+        .order("disease_name")
+        .execute()
+    )
+    return result.data
+
 
 def get_disease(crop_name: str, disease_name: str) -> Optional[Dict[str, Any]]:
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        SELECT d.* FROM diseases d
-        JOIN crops c ON d.crop_id = c.id
-        WHERE c.crop_name = ? AND d.disease_name = ?
-    """, (crop_name, disease_name))
-    row = c.fetchone()
-    conn.close()
-    return dict(row) if row else None
+    crop = supabase.table("crops").select("id").eq("crop_name", crop_name).execute()
+    if not crop.data:
+        return None
+    crop_id = crop.data[0]["id"]
+
+    result = (
+        supabase.table("diseases")
+        .select("*")
+        .eq("crop_id", crop_id)
+        .eq("disease_name", disease_name)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
 
 def list_all_diseases() -> List[Dict[str, Any]]:
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        SELECT d.id, c.crop_name, d.disease_name, d.description, d.cure
-        FROM diseases d
-        JOIN crops c ON d.crop_id = c.id
-        ORDER BY c.crop_name COLLATE NOCASE, d.disease_name COLLATE NOCASE
-    """)
-    rows = c.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    """List all diseases with their crop names (via join)."""
+    # Supabase supports foreign key joins via select syntax
+    result = (
+        supabase.table("diseases")
+        .select("id, disease_name, description, cure, crops(crop_name)")
+        .order("disease_name")
+        .execute()
+    )
+    # Flatten the result for compatibility
+    diseases = []
+    for row in result.data:
+        diseases.append({
+            "id": row["id"],
+            "crop_name": row["crops"]["crop_name"] if row.get("crops") else "Unknown",
+            "disease_name": row["disease_name"],
+            "description": row["description"],
+            "cure": row["cure"]
+        })
+    return diseases
+
 
 # -------------------------
 # Simple CLI for testing
 # -------------------------
 def _print_menu():
-    print("\nSmart Agro DB CLI")
-    print("------------------")
-    print("1. Initialize DB and populate labels")
-    print("2. List crops")
-    print("3. List all diseases")
-    print("4. Show diseases for a crop")
-    print("5. Add crop")
-    print("6. Delete crop")
-    print("7. Add disease")
-    print("8. Delete disease")
-    print("9. Update crop info")
-    print("10. Update disease info/cure")
+    print("\nSmart Agro DB CLI (Supabase)")
+    print("----------------------------")
+    print("1. List crops")
+    print("2. List all diseases")
+    print("3. Show diseases for a crop")
+    print("4. Add crop")
+    print("5. Delete crop")
+    print("6. Add disease")
+    print("7. Delete disease")
+    print("8. Update crop info")
+    print("9. Update disease info/cure")
     print("0. Exit")
+
 
 def _cli():
     while True:
         _print_menu()
         choice = input("Choice: ").strip()
         if choice == "1":
-            init_db()
-            populate_from_labels()
-            print("DB initialized and populated.")
-        elif choice == "2":
             crops = list_crops()
             print(f"\nTotal crops: {len(crops)}")
             for c in crops:
                 print(f"- {c['crop_name']} | info: {c['info']}")
-        elif choice == "3":
+        elif choice == "2":
             diseases = list_all_diseases()
             print(f"\nTotal disease records: {len(diseases)}")
             for d in diseases:
                 print(f"- {d['crop_name']} :: {d['disease_name']}")
-        elif choice == "4":
+        elif choice == "3":
             crop = input("Crop name: ").strip()
             ds = get_diseases_by_crop(crop)
             if not ds:
@@ -410,33 +250,33 @@ def _cli():
             else:
                 for d in ds:
                     print(f"- {d['disease_name']} | desc: {d['description']} | cure: {d['cure']}")
-        elif choice == "5":
+        elif choice == "4":
             name = input("New crop name: ").strip()
             info = input("Info (or leave blank): ").strip()
             ok = add_crop(name, info or None)
             print("Added." if ok else "Already exists / failed.")
-        elif choice == "6":
+        elif choice == "5":
             name = input("Crop name to delete: ").strip()
             ok = delete_crop(name)
             print("Deleted." if ok else "Not found.")
-        elif choice == "7":
+        elif choice == "6":
             crop = input("Crop name: ").strip()
             disease = input("Disease name: ").strip()
             desc = input("Description (or blank): ").strip()
             cure = input("Cure (or blank): ").strip()
             ok = add_disease(crop, disease, desc or None, cure or None)
             print("Added disease." if ok else "Failed (crop missing or already exists).")
-        elif choice == "8":
+        elif choice == "7":
             crop = input("Crop name: ").strip()
             disease = input("Disease name to delete: ").strip()
             ok = delete_disease(crop, disease)
             print("Deleted." if ok else "Not found.")
-        elif choice == "9":
+        elif choice == "8":
             crop = input("Crop name: ").strip()
             info = input("New info text: ").strip()
             ok = update_crop_info(crop, info)
             print("Updated." if ok else "Not found.")
-        elif choice == "10":
+        elif choice == "9":
             crop = input("Crop name: ").strip()
             disease = input("Disease name: ").strip()
             desc = input("New description (or blank to skip): ").strip()
@@ -449,10 +289,11 @@ def _cli():
         else:
             print("Invalid choice.")
 
+
 # -------------------------
 # Auto-run when executed
 # -------------------------
 if __name__ == "__main__":
-    print("Smart Agro DB module executed directly.")
-    print("If this is the first run, choose option 1 to initialize and populate the database.")
+    print("Smart Agro DB module (Supabase) executed directly.")
+    print("Schema and seed data are managed in Supabase.")
     _cli()

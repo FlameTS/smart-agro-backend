@@ -1,6 +1,14 @@
 # ==============================
 # Smart Agro Backend (FastAPI)
+# Supabase Edition
 # ==============================
+
+import os
+import uuid
+from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,16 +17,28 @@ from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
 import base64
 
-
 import torch
 from torchvision import transforms
 from PIL import Image
-import sqlite3
+from supabase import create_client, Client
 import io
 
 from model.model_def import CropDiseaseCNN
 
 import numpy as np
+
+# ------------------------------
+# Supabase client
+# ------------------------------
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_ANON_KEY must be set in .env")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+print("Supabase client initialized")
+
 
 def is_likely_leaf(pil_image):
     img = np.array(pil_image)
@@ -88,17 +108,11 @@ transform = transforms.Compose([
 ])
 
 # ------------------------------
-# Database connection
-# ------------------------------
-def get_connection():
-    return sqlite3.connect("DB/smart_agro.db")
-
-# ------------------------------
 # Health check
 # ------------------------------
 @app.get("/")
 def health_check():
-    return {"status": "Smart Agro API is running"}
+    return {"status": "Smart Agro API is running", "database": "Supabase"}
 
 # ------------------------------
 # Prediction endpoint
@@ -166,29 +180,66 @@ async def predict(file: UploadFile = File(...)):
         visualization_img.save(buffer, format="JPEG")
         gradcam_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-
-
         # --------------------------
-        # Database lookup
+        # Supabase database lookup
         # --------------------------
-        conn = get_connection()
-        cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT info FROM crops WHERE crop_name = ?",
-            (crop,)
+        # Fetch crop info
+        crop_result = (
+            supabase.table("crops")
+            .select("info")
+            .eq("crop_name", crop)
+            .execute()
         )
-        crop_info = cursor.fetchone()
+        crop_info = crop_result.data[0]["info"] if crop_result.data else "Information not available"
 
-        disease_data = None
+        # Fetch disease info (only if not healthy)
+        disease_description = None
+        disease_cure = None
         if "healthy" not in disease.lower():
-            cursor.execute(
-                "SELECT description, cure FROM diseases WHERE disease_name = ?",
-                (disease,)
+            disease_result = (
+                supabase.table("diseases")
+                .select("description, cure")
+                .eq("disease_name", disease)
+                .execute()
             )
-            disease_data = cursor.fetchone()
+            if disease_result.data:
+                disease_description = disease_result.data[0]["description"]
+                disease_cure = disease_result.data[0]["cure"]
 
-        conn.close()
+        # --------------------------
+        # Upload image to Supabase Storage
+        # --------------------------
+        image_url = None
+        try:
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            unique_id = uuid.uuid4().hex[:8]
+            file_ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "jpg"
+            storage_path = f"{crop}/{timestamp}_{unique_id}.{file_ext}"
+
+            supabase.storage.from_("crop-images").upload(
+                path=storage_path,
+                file=image_bytes,
+                file_options={"content-type": file.content_type or "image/jpeg"}
+            )
+
+            image_url = f"{SUPABASE_URL}/storage/v1/object/public/crop-images/{storage_path}"
+        except Exception:
+            pass  # Don't fail the response if upload fails
+
+        # --------------------------
+        # Log prediction to history
+        # --------------------------
+        try:
+            supabase.table("prediction_history").insert({
+                "crop_name": crop,
+                "disease_name": disease,
+                "confidence": round(confidence, 4),
+                "image_uploaded": image_url is not None,
+                "image_url": image_url
+            }).execute()
+        except Exception:
+            pass  # Don't fail the response if logging fails
 
         # --------------------------
         # Response
@@ -198,10 +249,11 @@ async def predict(file: UploadFile = File(...)):
             "crop": crop,
             "disease": disease.replace("_", " "),
             "confidence": confidence,   # 0–1 ONLY
-            "crop_info": crop_info[0] if crop_info else "Information not available",
-            "disease_info": disease_data[0] if disease_data else None,
-            "cure": disease_data[1] if disease_data else None,
-            "gradcam_image": gradcam_base64
+            "crop_info": crop_info,
+            "disease_info": disease_description,
+            "cure": disease_cure,
+            "gradcam_image": gradcam_base64,
+            "image_url": image_url
         }
 
     except Exception as e:
