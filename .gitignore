@@ -1,5 +1,5 @@
 # Large files to ignore (prevents GitHub push errors)
-model/
+model/crop_disease_model.pth
 *.pth
 
 
