@@ -10,3 +10,4 @@ torch --index-url https://download.pytorch.org/whl/cpu
 torchvision --index-url https://download.pytorch.org/whl/cpu
 supabase
 python-dotenv
+huggingface_hub
