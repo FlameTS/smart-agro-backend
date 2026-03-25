@@ -1,24 +1,29 @@
 FROM python:3.10
 
-# Set up a new user to avoid root permissions issues
+# Install system dependencies (THIS FIXES libGL)
+RUN apt-get update && apt-get install -y \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
 RUN useradd -m -u 1000 user
-
-RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
-
 USER user
 ENV PATH="/home/user/.local/bin:$PATH"
 
 WORKDIR /app
 
-# Copy requirements and install
+# Install Python dependencies
 COPY --chown=user requirements.txt .
-RUN pip install --no-cache-dir --upgrade -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the backend files
+# Copy project files
 COPY --chown=user . .
+COPY model/ ./model/
+COPY DB/ ./DB/
 
-# Expose the port Hugging Face expects
-EXPOSE 10000
+EXPOSE 7860
 
-# Run using uvicorn on the specific port HF requires
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
+# Start FastAPI
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]

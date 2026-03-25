@@ -7,10 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
-import cv2
 import base64
-from huggingface_hub import hf_hub_download
-import os
+
 
 import torch
 from torchvision import transforms
@@ -60,13 +58,10 @@ print("Using device:", device)
 # ------------------------------
 # Load model ONCE
 # ------------------------------
-model_path = hf_hub_download(
-    repo_id="Tarman21/smart-agro-model-v1",   
-    filename="crop_disease_model.pth",
-    local_dir="/tmp/model"
+checkpoint = torch.load(
+    "model/crop_disease_model.pth",
+    map_location=device
 )
-
-checkpoint = torch.load(model_path, map_location=device)
 
 class_names = checkpoint["class_names"]
 
@@ -155,18 +150,22 @@ async def predict(file: UploadFile = File(...)):
         grayscale_cam = cam(input_tensor=image, targets=targets)
         heatmap = grayscale_cam[0]
 
-        # Convert PIL image to OpenCV format
-        original_image = np.array(pil_image)
-        original_image = cv2.resize(original_image, (224, 224))
+        from io import BytesIO
 
-        rgb_img = original_image.astype(np.float32) / 255.0
-        heatmap = cv2.resize(heatmap, (224, 224))
-
+        original_image = pil_image.resize((224, 224))
+        rgb_img = np.array(original_image).astype(np.float32) / 255.0
+        
+        heatmap = np.resize(heatmap, (224, 224))
+        
         visualization = show_cam_on_image(rgb_img, heatmap, use_rgb=True)
+        
+        # Convert numpy image to PIL
+        visualization_img = Image.fromarray(visualization)
+        
+        buffer = BytesIO()
+        visualization_img.save(buffer, format="JPEG")
+        gradcam_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-        # Convert to base64
-        _, buffer = cv2.imencode(".jpg", cv2.cvtColor(visualization, cv2.COLOR_RGB2BGR))
-        gradcam_base64 = base64.b64encode(buffer).decode("utf-8")
 
 
         # --------------------------
