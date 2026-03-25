@@ -61,7 +61,7 @@ print("Using device:", device)
 # Load model ONCE
 # ------------------------------
 model_path = hf_hub_download(
-    repo_id="your-username/smart-agro-model-v1",   
+    repo_id="Tarman21/smart-agro-model-v1",   
     filename="crop_disease_model.pth",
     local_dir="/tmp/model"
 )
