@@ -9,7 +9,8 @@ from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
 import cv2
 import base64
-
+from huggingface_hub import hf_hub_download
+import os
 
 import torch
 from torchvision import transforms
@@ -59,10 +60,13 @@ print("Using device:", device)
 # ------------------------------
 # Load model ONCE
 # ------------------------------
-checkpoint = torch.load(
-    "model/crop_disease_model.pth",
-    map_location=device
+model_path = hf_hub_download(
+    repo_id="your-username/smart-agro-model-v1",   
+    filename="crop_disease_model.pth",
+    local_dir="/tmp/model"
 )
+
+checkpoint = torch.load(model_path, map_location=device)
 
 class_names = checkpoint["class_names"]
 

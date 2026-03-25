@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir --upgrade -r requirements.txt
 COPY --chown=user . .
 
 # Expose the port Hugging Face expects
-EXPOSE 7860
+EXPOSE 10000
 
 # Run using uvicorn on the specific port HF requires
-CMD ["uvicorn", "Main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
