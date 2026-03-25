@@ -2,6 +2,10 @@ FROM python:3.10
 
 # Set up a new user to avoid root permissions issues
 RUN useradd -m -u 1000 user
+
+RUN apt-get update && apt-get install -y libgl1-mesa-glx libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+
+
 USER user
 ENV PATH="/home/user/.local/bin:$PATH"
 
