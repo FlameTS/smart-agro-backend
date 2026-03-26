@@ -259,6 +259,9 @@ async def predict(file: UploadFile = File(...), lang: str = "en"):
         # Translate to target language
         #--------------------------
         if lang != "en":
+            crop = translate_from_english(crop, lang)
+            disease = translate_from_english(disease.replace("_", " "), lang)
+
             crop_info = translate_from_english(crop_info, lang)
             if disease_description:
                 disease_description = translate_from_english(disease_description, lang)
@@ -271,7 +274,7 @@ async def predict(file: UploadFile = File(...), lang: str = "en"):
         return {
             "status": "success",
             "crop": crop,
-            "disease": disease.replace("_", " "),
+            "disease": disease,
             "confidence": confidence,   # 0–1 ONLY
             "crop_info": crop_info,
             "disease_info": disease_description,
