@@ -90,24 +90,57 @@ print("Using device:", device)
 # ------------------------------
 # Load model ONCE
 # ------------------------------
-model_path = hf_hub_download(
-    repo_id="Tarman21/smart-agro-model-v1",
-    filename="crop_disease_model.pth"
-)
+# model_path = hf_hub_download(
+#     repo_id="Tarman21/smart-agro-model-v1",
+#     filename="crop_disease_model.pth"
+# )
 
-checkpoint = torch.load(model_path, map_location=device)
+# checkpoint = torch.load(model_path, map_location=device)
 
-class_names = checkpoint["class_names"]
+# class_names = checkpoint["class_names"]
 
-model = CropDiseaseCNN(num_classes=len(class_names))
-model.load_state_dict(checkpoint["model_state"])
-model.to(device)
-model.eval()
+# model = CropDiseaseCNN(num_classes=len(class_names))
+# model.load_state_dict(checkpoint["model_state"])
+# model.to(device)
+# model.eval()
 
-target_layer = model.features[6]
-cam = GradCAM(model=model, target_layers=[target_layer])
+# target_layer = model.features[6]
+# cam = GradCAM(model=model, target_layers=[target_layer])
 
-print("Model loaded successfully")
+# print("Model loaded successfully")
+
+# ------------------------------
+# Lazy model loader (cached)
+# ------------------------------
+_model = None
+_cam = None
+_class_names = None
+
+def load_model():
+    global _model, _cam, _class_names
+
+    if _model is None:
+        print("🔄 Loading model...")
+
+        model_path = hf_hub_download(
+            repo_id="Tarman21/smart-agro-model-v1",
+            filename="crop_disease_model.pth"
+        )
+
+        checkpoint = torch.load(model_path, map_location=device)
+        _class_names = checkpoint["class_names"]
+
+        _model = CropDiseaseCNN(num_classes=len(_class_names))
+        _model.load_state_dict(checkpoint["model_state"])
+        _model.to(device)
+        _model.eval()
+
+        target_layer = _model.features[6]
+        _cam = GradCAM(model=_model, target_layers=[target_layer])
+
+        print("✅ Model loaded successfully")
+
+    return _model, _cam, _class_names
 
 # ------------------------------
 # Image transform (same as validation)
@@ -137,6 +170,7 @@ async def predict(
     lang: str = Form("en")
     ):
     try:
+        model, cam, class_names = load_model()
         # Read image bytes
         image_bytes = await file.read()
         pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
