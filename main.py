@@ -16,6 +16,7 @@ from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
 import base64
+from deep_translator import GoogleTranslator
 
 import torch
 from torchvision import transforms
@@ -71,6 +72,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+#-----------------------
+# Translation function
+#-----------------------
+def translate_to_english(text):
+    return GoogleTranslator(source='auto', target='en').translate(text)
+
+def translate_from_english(text, target_lang):
+    return GoogleTranslator(source='en', target=target_lang).translate(text)
+
 # ------------------------------
 # Device
 # ------------------------------
@@ -122,7 +132,7 @@ def health_check():
 # Prediction endpoint
 # ------------------------------
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(file: UploadFile = File(...), lang: str = "en"):
     try:
         # Read image bytes
         image_bytes = await file.read()
@@ -244,6 +254,16 @@ async def predict(file: UploadFile = File(...)):
             }).execute()
         except Exception:
             pass  # Don't fail the response if logging fails
+        
+        #--------------------------
+        # Translate to target language
+        #--------------------------
+        if lang != "en":
+            crop_info = translate_from_english(crop_info, lang)
+            if disease_description:
+                disease_description = translate_from_english(disease_description, lang)
+            if disease_cure:
+                disease_cure = translate_from_english(disease_cure, lang)
 
         # --------------------------
         # Response

@@ -11,3 +11,4 @@ torchvision --index-url https://download.pytorch.org/whl/cpu
 supabase
 python-dotenv
 huggingface_hub
+deep-translator
