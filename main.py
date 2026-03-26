@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
@@ -132,7 +132,10 @@ def health_check():
 # Prediction endpoint
 # ------------------------------
 @app.post("/predict")
-async def predict(file: UploadFile = File(...), lang: str = "en"):
+async def predict(
+    file: UploadFile = File(...), 
+    lang: str = Form("en")
+    ):
     try:
         # Read image bytes
         image_bytes = await file.read()
