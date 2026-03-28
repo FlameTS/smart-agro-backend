@@ -155,6 +155,41 @@ async def clear_chat_history(session_id: str):
         pass
     return {"status":"cleared"}
 
+@app.get("/chat/sessions")
+async def get_sessions():
+    try:
+        result = supabase.table("chat_history") \
+            .select("session_id, message, created_at") \
+            .eq("role", "user") \
+            .order("created_at", desc=True) \
+            .execute()
+
+        seen = {}
+        for row in result.data:
+            sid = row["session_id"]
+            if sid not in seen:
+                seen[sid] = {
+                    "session_id": sid,
+                    "preview": row["message"][:60] + "..." if len(row["message"]) > 60 else row["message"],
+                    "date": row["created_at"][:10]
+                }
+        return {"sessions": list(seen.values())}
+    except Exception as e:
+        return {"sessions": [], "error": str(e)}
+
+
+@app.get("/chat/sessions/{session_id}")
+async def get_session_messages(session_id: str):
+    try:
+        result = supabase.table("chat_history") \
+            .select("role, message, created_at") \
+            .eq("session_id", session_id) \
+            .order("created_at", desc=False) \
+            .execute()
+        return {"messages": result.data}
+    except Exception as e:
+        return {"messages": [], "error": str(e)}
+
 #-----------------------
 # Translation function
 #-----------------------
