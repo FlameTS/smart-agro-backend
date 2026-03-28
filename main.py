@@ -98,6 +98,7 @@ async def chat(request: Request):
 
     language = body.get("language", "en")
     disease_context = body.get("disease_context", None)
+    session_id = body.get("session_id", "default")
 
     lang_map = {
         "en": "English",
@@ -132,8 +133,27 @@ async def chat(request: Request):
     )
 
     reply = response.choices[0].message.content
+
+    #Save Chat History
+    try:
+        supabase.table("chat_history").insert([
+            {"session_id": session_id, "role": "user", "message": user_message, "language": language},
+            {"session_id": session_id, "role": "bot", "message": reply, "language": language}
+        ]).execute()
+    except Exception as e:
+        print(f"Error saving chat history: {e}")
+    
     return {"reply": reply}
 
+# Clear Chat History
+@app.delete("/chat/history/{session_id}")
+async def clear_chat_history(session_id: str):
+    try:
+        supabase.table("chat_history").delete().eq("session_id", session_id).execute()
+    except Exception as e:
+        print(f"Error clearing chat history: {e}")
+        pass
+    return {"status":"cleared"}
 
 #-----------------------
 # Translation function
