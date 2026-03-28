@@ -1,16 +1,19 @@
 # ==============================
 # Smart Agro Backend (FastAPI)
 # Supabase Edition
+# Lang Implemented
+# Groq API Implemented Chatbot
 # ==============================
 
 import os
 import uuid
 from datetime import datetime
 from dotenv import load_dotenv
+from groq import Groq
 
 load_dotenv()
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
@@ -59,6 +62,7 @@ def is_likely_leaf(pil_image):
 
     return green_ratio > 0.45
 
+
 # ------------------------------
 # App initialization
 # ------------------------------
@@ -71,6 +75,65 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+#----------------------------------
+#Groq Chatbot Implementation
+#------------------------------
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+
+SYSTEM_PROMPT = """You are an expert agricultural assistant helping farmers in India.
+You help with crop diseases, treatments, farming tips, and plant health.
+Keep responses short, simple, and farmer-friendly.
+If asked about a specific disease, give practical treatment steps.
+Respond in the same language the user writes in (English, Hindi, Punjabi, or Tamil)."""
+
+@app.post("/chat")
+async def chat(request: Request):
+    body = await request.json()
+
+    user_message = body.get("message", "")
+
+    if not user_message:
+        return {"reply": "Please ask a question."}
+
+    language = body.get("language", "en")
+    disease_context = body.get("disease_context", None)
+
+    lang_map = {
+        "en": "English",
+        "hi": "Hindi",
+        "pa": "Punjabi",
+        "ta": "Tamil"
+    }
+
+    lang_name = lang_map.get(language, "English")
+    
+    # Build messages
+    messages = [ 
+        {"role": "system", "content": SYSTEM_PROMPT + f" Answer in {lang_name}."}
+    ]
+
+    # If disease context exists (result page), inject it
+    if disease_context:
+        disease = disease_context.get("disease", "")
+        crop = disease_context.get("crop", "")
+        confidence = disease_context.get("confidence", "")
+
+        context_msg = f"The farmer just got a prediction result: Disease = {disease}, Crop = {crop}, Confidence = {confidence}%. Answer accordingly."
+        messages.append({"role": "system", "content": context_msg})
+
+    messages.append({"role": "user", "content": user_message})
+
+    response = groq_client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=messages,
+        max_tokens=300,
+        temperature=0.7,
+    )
+
+    reply = response.choices[0].message.content
+    return {"reply": reply}
+
 
 #-----------------------
 # Translation function

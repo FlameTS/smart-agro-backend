@@ -15,3 +15,4 @@ supabase
 python-dotenv
 huggingface_hub
 deep-translator
+groq
