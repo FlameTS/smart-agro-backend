@@ -1,22 +1,12 @@
 ---
-
 title: Smart Agro Api
-
 emoji: 🌿
-
 colorFrom: green
-
 colorTo: blue
-
 sdk: docker
-
-app\_port: 7860
-
+app_port: 7860
 ---
 
+# Smart Agro API Backend
 
-
-\# Smart Agro API Backend
-
-FastAPI implementation for crop recommendation.
-
+FastAPI backend for crop disease detection with CNN classification, YOLO+SAM2 segmentation, Grad-CAM visualization, and Groq-powered chatbot.

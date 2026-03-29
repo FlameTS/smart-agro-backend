@@ -1,0 +1,17 @@
+.git
+.github
+__pycache__
+*.pyc
+.env
+DB/
+sam2_repo/
+weights/
+*.pth
+*.pt
+smartagro_venv/
+venv/
+.venv/
+test_pipeline.py
+SUPABASE_MIGRATION_GUIDE.md
+supabase_schema.sql
+rebuild.txt
