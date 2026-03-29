@@ -17,3 +17,10 @@ venv/
 
 model_details&Creation/
 *.png
+
+weights/
+*.pt
+
+sam2_repo/
+
+test_pipeline.py

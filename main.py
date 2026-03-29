@@ -11,7 +11,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 from groq import Groq
 
-load_dotenv()
+from pathlib import Path
+load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, UploadFile, File, Form, Request, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -220,6 +221,8 @@ async def get_session_messages(session_id: str, authorization: str = Header(None
         return {"messages": result.data}
     except Exception as e:
         return {"messages": [], "error": str(e)}
+
+
 
 #-----------------------
 # Translation function
@@ -477,3 +480,86 @@ async def predict(
             "status": "error",
             "message": str(e)
         }
+
+# ==============================
+# YOLO + SAM2 Segmentation
+# ==============================
+_pipeline = None
+
+def load_pipeline():
+    global _pipeline
+    if _pipeline is None:
+        print("Loading YOLO + SAM2 pipeline...")
+        BASE = os.path.dirname(os.path.abspath(__file__))
+
+        # Download weights from HF hub (same pattern as CNN model)
+        yolo_w = hf_hub_download(
+            repo_id="Tarman21/smart-agro-model-v1",
+            filename="yolo_best.pt"
+        )
+        sam2_w = hf_hub_download(
+            repo_id="Tarman21/smart-agro-model-v1",
+            filename="sam2_hiera_small.pt"
+        )
+        sam2_cfg = os.path.join(BASE, "sam2_repo", "sam2", "configs", "sam2", "sam2_hiera_s.yaml")
+
+        from pipeline import YOLOSam2Pipeline
+        _pipeline = YOLOSam2Pipeline(
+            yolo_weights=yolo_w,
+            sam2_weights=sam2_w,
+            sam2_cfg=sam2_cfg,
+        )
+        print("YOLO + SAM2 pipeline ready.")
+    return _pipeline
+
+@app.post("/predict/segment")
+async def predict_segment(file: UploadFile = File(...)):
+    try:
+        pipeline   = load_pipeline()
+        image_bytes = await file.read()
+        pil_image  = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image_np   = np.array(pil_image)
+
+        result = pipeline.run(image_np)
+
+        # Convert annotated image to base64
+        annotated_pil = Image.fromarray(result["annotated_image"])
+        buffer = io.BytesIO()
+        annotated_pil.save(buffer, format="JPEG")
+        annotated_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        # Upload to Supabase storage
+        seg_url = None
+        try:
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            unique_id = uuid.uuid4().hex[:8]
+            seg_path  = f"segmentations/{timestamp}_{unique_id}.jpg"
+            supabase.storage.from_("crop-images").upload(
+                path=seg_path,
+                file=buffer.getvalue(),
+                file_options={"content-type": "image/jpeg"}
+            )
+            seg_url = f"{SUPABASE_URL}/storage/v1/object/public/crop-images/{seg_path}"
+        except Exception as e:
+            print(f"Supabase upload failed: {e}")
+
+        # Save to DB
+        try:
+            supabase.table("segmentation_results").insert({
+                "detections":      result["detections"],
+                "detection_count": result["detection_count"],
+                "seg_image_url":   seg_url,
+            }).execute()
+        except Exception as e:
+            print(f"DB insert failed: {e}")
+
+        return {
+            "status":          "success",
+            "detection_count": result["detection_count"],
+            "detections":      result["detections"],
+            "annotated_image": annotated_b64,
+            "seg_image_url":   seg_url,
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

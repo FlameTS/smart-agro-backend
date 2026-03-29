@@ -1,9 +1,10 @@
 FROM python:3.10
 
-# Install system dependencies (THIS FIXES libGL)
+# System dependencies
 RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -18,15 +19,16 @@ COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
-COPY --chown=user . .
-COPY model/ ./model/
+# Install SAM2 from bundled repo
+COPY --chown=user sam2_repo/ ./sam2_repo/
+RUN pip install --no-cache-dir -e ./sam2_repo
 
-# Supabase env vars (override at runtime)
+# Copy rest of project
+COPY --chown=user . .
+
 ENV SUPABASE_URL=""
 ENV SUPABASE_ANON_KEY=""
 
 EXPOSE 7860
 
-# Start FastAPI
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
