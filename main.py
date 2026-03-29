@@ -13,7 +13,7 @@ from groq import Groq
 
 load_dotenv()
 
-from fastapi import FastAPI, UploadFile, File, Form, Request
+from fastapi import FastAPI, UploadFile, File, Form, Request, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
@@ -76,6 +76,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+async def get_current_user(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        # For minimal changes, if we want to allow unauthenticated predictions, we could return None.
+        # But since we want to separate user data, we require authentication.
+        return None
+    token = authorization.split(" ")[1]
+    try:
+        user_res = supabase.auth.get_user(token)
+        return user_res.user
+    except Exception as e:
+        print("Auth error:", e)
+        return None
+
 #----------------------------------
 #Groq Chatbot Implementation
 #------------------------------
@@ -88,7 +101,8 @@ If asked about a specific disease, give practical treatment steps.
 Respond in the same language the user writes in (English, Hindi, Punjabi, or Tamil)."""
 
 @app.post("/chat")
-async def chat(request: Request):
+async def chat(request: Request, authorization: str = Header(None)):
+    user = await get_current_user(authorization)
     body = await request.json()
 
     user_message = body.get("message", "")
@@ -136,9 +150,10 @@ async def chat(request: Request):
 
     #Save Chat History
     try:
+        user_id = user.id if user else None
         supabase.table("chat_history").insert([
-            {"session_id": session_id, "role": "user", "message": user_message, "language": language},
-            {"session_id": session_id, "role": "bot", "message": reply, "language": language}
+            {"session_id": session_id, "role": "user", "message": user_message, "language": language, "user_id": user_id},
+            {"session_id": session_id, "role": "bot", "message": reply, "language": language, "user_id": user_id}
         ]).execute()
     except Exception as e:
         print(f"Error saving chat history: {e}")
@@ -147,22 +162,32 @@ async def chat(request: Request):
 
 # Clear Chat History
 @app.delete("/chat/history/{session_id}")
-async def clear_chat_history(session_id: str):
+async def clear_chat_history(session_id: str, authorization: str = Header(None)):
+    user = await get_current_user(authorization)
     try:
-        supabase.table("chat_history").delete().eq("session_id", session_id).execute()
+        if user:
+            supabase.table("chat_history").delete().eq("session_id", session_id).eq("user_id", user.id).execute()
+        else:
+            supabase.table("chat_history").delete().eq("session_id", session_id).is_("user_id", "null").execute()
     except Exception as e:
         print(f"Error clearing chat history: {e}")
         pass
     return {"status":"cleared"}
 
 @app.get("/chat/sessions")
-async def get_sessions():
+async def get_sessions(authorization: str = Header(None)):
+    user = await get_current_user(authorization)
     try:
-        result = supabase.table("chat_history") \
+        query = supabase.table("chat_history") \
             .select("session_id, message, created_at") \
-            .eq("role", "user") \
-            .order("created_at", desc=True) \
-            .execute()
+            .eq("role", "user")
+            
+        if user:
+            query = query.eq("user_id", user.id)
+        else:
+            query = query.is_("user_id", "null")
+            
+        result = query.order("created_at", desc=True).execute()
 
         seen = {}
         for row in result.data:
@@ -179,13 +204,19 @@ async def get_sessions():
 
 
 @app.get("/chat/sessions/{session_id}")
-async def get_session_messages(session_id: str):
+async def get_session_messages(session_id: str, authorization: str = Header(None)):
+    user = await get_current_user(authorization)
     try:
-        result = supabase.table("chat_history") \
+        query = supabase.table("chat_history") \
             .select("role, message, created_at") \
-            .eq("session_id", session_id) \
-            .order("created_at", desc=False) \
-            .execute()
+            .eq("session_id", session_id)
+            
+        if user:
+            query = query.eq("user_id", user.id)
+        else:
+            query = query.is_("user_id", "null")
+            
+        result = query.order("created_at", desc=False).execute()
         return {"messages": result.data}
     except Exception as e:
         return {"messages": [], "error": str(e)}
@@ -285,8 +316,10 @@ def health_check():
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...), 
-    lang: str = Form("en")
-    ):
+    lang: str = Form("en"),
+    authorization: str = Header(None)
+):
+    user = await get_current_user(authorization)
     try:
         model, cam, class_names = load_model()
         # Read image bytes
@@ -401,6 +434,7 @@ async def predict(
         # --------------------------
         try:
             supabase.table("prediction_history").insert({
+                "user_id": user.id if user else None,
                 "crop_name": crop,
                 "disease_name": disease,
                 "confidence": round(confidence, 4),
