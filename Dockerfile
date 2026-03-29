@@ -19,9 +19,11 @@ COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install SAM2 from bundled repo
-COPY --chown=user sam2_repo/ ./sam2_repo/
-RUN pip install --no-cache-dir -e ./sam2_repo
+# Clone SAM2 repo
+RUN git clone https://github.com/facebookresearch/sam2.git sam2_repo
+
+# Install SAM2
+RUN pip install --no-cache-dir -e sam2_repo
 
 # Copy rest of project
 COPY --chown=user . .
