@@ -82,10 +82,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-def read_root():
-    return {"status": "healthy", "message": "Smart Agro API is running"}
-
 async def get_current_user(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         # For minimal changes, if we want to allow unauthenticated predictions, we could return None.
@@ -102,7 +98,10 @@ async def get_current_user(authorization: str = Header(None)):
 #----------------------------------
 #Groq Chatbot Implementation
 #------------------------------
-groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", "placeholder"))
+groq_api_key = os.environ.get("GROQ_API_KEY")
+if not groq_api_key:
+    raise RuntimeError("GROQ_API_KEY must be set (via .env locally or HF Spaces Secrets in production)")
+groq_client = Groq(api_key=groq_api_key)
 
 SYSTEM_PROMPT = """You are an expert agricultural assistant helping farmers in India.
 You help with crop diseases, treatments, farming tips, and plant health.
@@ -171,14 +170,17 @@ async def chat(request: Request, authorization: str = Header(None)):
     return {"reply": reply}
 
 # Clear Chat History
+# Clear Chat History
 @app.delete("/chat/history/{session_id}")
 async def clear_chat_history(session_id: str, authorization: str = Header(None)):
     user = await get_current_user(authorization)
+    
+    # Only allow users to clear their own history
+    if not user:
+        return {"status": "error", "message": "Must be authenticated to clear history"}
+    
     try:
-        if user:
-            supabase.table("chat_history").delete().eq("session_id", session_id).eq("user_id", user.id).execute()
-        else:
-            supabase.table("chat_history").delete().eq("session_id", session_id).is_("user_id", "null").execute()
+        supabase.table("chat_history").delete().eq("session_id", session_id).eq("user_id", user.id).execute()
     except Exception as e:
         print(f"Error clearing chat history: {e}")
         pass
@@ -187,17 +189,17 @@ async def clear_chat_history(session_id: str, authorization: str = Header(None))
 @app.get("/chat/sessions")
 async def get_sessions(authorization: str = Header(None)):
     user = await get_current_user(authorization)
+    
+    # Only return sessions for authenticated users
+    if not user:
+        return {"sessions": []}
+    
     try:
-        query = supabase.table("chat_history") \
+        result = supabase.table("chat_history") \
             .select("session_id, message, created_at") \
-            .eq("role", "user")
-            
-        if user:
-            query = query.eq("user_id", user.id)
-        else:
-            query = query.is_("user_id", "null")
-            
-        result = query.order("created_at", desc=True).execute()
+            .eq("user_id", user.id) \
+            .eq("role", "user") \
+            .order("created_at", desc=True).execute()
 
         seen = {}
         for row in result.data:
@@ -216,21 +218,20 @@ async def get_sessions(authorization: str = Header(None)):
 @app.get("/chat/sessions/{session_id}")
 async def get_session_messages(session_id: str, authorization: str = Header(None)):
     user = await get_current_user(authorization)
+    
+    # Only return messages for authenticated users
+    if not user:
+        return {"messages": []}
+    
     try:
-        query = supabase.table("chat_history") \
+        result = supabase.table("chat_history") \
             .select("role, message, created_at") \
-            .eq("session_id", session_id)
-            
-        if user:
-            query = query.eq("user_id", user.id)
-        else:
-            query = query.is_("user_id", "null")
-            
-        result = query.order("created_at", desc=False).execute()
+            .eq("session_id", session_id) \
+            .eq("user_id", user.id) \
+            .order("created_at", desc=False).execute()
         return {"messages": result.data}
     except Exception as e:
         return {"messages": [], "error": str(e)}
-
 
 
 #-----------------------
@@ -249,28 +250,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
 # ------------------------------
-# Load model ONCE
-# ------------------------------
-# model_path = hf_hub_download(
-#     repo_id="Tarman21/smart-agro-model-v1",
-#     filename="crop_disease_model.pth"
-# )
-
-# checkpoint = torch.load(model_path, map_location=device)
-
-# class_names = checkpoint["class_names"]
-
-# model = CropDiseaseCNN(num_classes=len(class_names))
-# model.load_state_dict(checkpoint["model_state"])
-# model.to(device)
-# model.eval()
-
-# target_layer = model.features[6]
-# cam = GradCAM(model=model, target_layers=[target_layer])
-
-# print("Model loaded successfully")
-
-# ------------------------------
 # Lazy model loader (cached)
 # ------------------------------
 _model = None
@@ -280,26 +259,43 @@ _class_names = None
 def load_model():
     global _model, _cam, _class_names
 
-    if _model is None:
-        print("🔄 Loading model...")
+    if _model is not None:
+        return _model, _cam, _class_names
 
+    print("🔄 Loading model...")
+
+    local_model_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "weights",
+        "crop_disease_model.pth"
+    )
+
+    # Use local if available, else download
+    if os.path.exists(local_model_path):
+        model_path = local_model_path
+        print("✅ Using local model")
+    else:
+        print("⏳ Downloading from Hugging Face...")
         model_path = hf_hub_download(
             repo_id="Tarman21/smart-agro-model-v1",
             filename="crop_disease_model.pth"
         )
 
-        checkpoint = torch.load(model_path, map_location=device)
-        _class_names = checkpoint["class_names"]
+    # Load checkpoint
+    checkpoint = torch.load(model_path, map_location=device)
+    _class_names = checkpoint["class_names"]
 
-        _model = CropDiseaseCNN(num_classes=len(_class_names))
-        _model.load_state_dict(checkpoint["model_state"])
-        _model.to(device)
-        _model.eval()
+    # Build model
+    _model = CropDiseaseCNN(num_classes=len(_class_names))
+    _model.load_state_dict(checkpoint["model_state"])
+    _model.to(device)
+    _model.eval()
 
-        target_layer = _model.features[6]
-        _cam = GradCAM(model=_model, target_layers=[target_layer])
+    # Grad-CAM setup (safer layer selection)
+    target_layer = _model.features[-1]
+    _cam = GradCAM(model=_model, target_layers=[target_layer])
 
-        print("✅ Model loaded successfully")
+    print("✅ Model loaded successfully")
 
     return _model, _cam, _class_names
 
@@ -492,30 +488,83 @@ async def predict(
 # ==============================
 _pipeline = None
 
+def _find_sam2_cfg() -> str:
+    """
+    build_sam2() resolves the config name against sam2's own configs/ directory.
+    Different SAM2 versions use slightly different filenames:
+      - older: "sam2_hiera_s.yaml"
+      - newer: "sam2/sam2_hiera_s.yaml"  (nested under a sam2/ subfolder)
+    This helper tries both and raises a clear error if neither exists.
+    """
+    import sam2
+    import glob
+ 
+    sam2_pkg_dir = os.path.dirname(sam2.__file__)
+    configs_root = os.path.join(sam2_pkg_dir, "configs")
+ 
+    # Walk the configs directory and find the hiera_small config
+    pattern = os.path.join(configs_root, "**", "sam2_hiera_s.yaml")
+    matches = glob.glob(pattern, recursive=True)
+ 
+    if not matches:
+        # List what IS there to help debugging
+        all_cfgs = glob.glob(os.path.join(configs_root, "**", "*.yaml"), recursive=True)
+        raise FileNotFoundError(
+            f"Could not find sam2_hiera_s.yaml under {configs_root}.\n"
+            f"Available configs: {all_cfgs}"
+        )
+ 
+    # build_sam2 wants the path RELATIVE to the configs/ root
+    abs_path = matches[0]
+    rel_path = os.path.relpath(abs_path, configs_root)
+    print(f"[SAM2] Resolved config: {rel_path} (from {abs_path})")
+    return rel_path
+ 
+ 
 def load_pipeline():
     global _pipeline
-    if _pipeline is None:
-        print("Loading YOLO + SAM2 pipeline...")
-        BASE = os.path.dirname(os.path.abspath(__file__))
-
-        # Download weights from HF hub (same pattern as CNN model)
+ 
+    if _pipeline is not None:
+        return _pipeline
+ 
+    print("🔄 Loading YOLO + SAM2 pipeline...")
+ 
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+ 
+    local_yolo = os.path.join(base_dir, "weights", "yolo_best.pt")
+    local_sam2 = os.path.join(base_dir, "weights", "sam2_hiera_small.pt")
+ 
+    if os.path.exists(local_yolo):
+        yolo_w = local_yolo
+        print("✅ Using local YOLO model")
+    else:
+        print("⏳ Downloading YOLO from Hugging Face...")
         yolo_w = hf_hub_download(
             repo_id="Tarman21/smart-agro-model-v1",
             filename="yolo_best.pt"
         )
+ 
+    if os.path.exists(local_sam2):
+        sam2_w = local_sam2
+        print("✅ Using local SAM2 model")
+    else:
+        print("⏳ Downloading SAM2 from Hugging Face...")
         sam2_w = hf_hub_download(
             repo_id="Tarman21/smart-agro-model-v1",
             filename="sam2_hiera_small.pt"
         )
-        sam2_cfg = "sam2_hiera_s.yaml"
-
-        from pipeline import YOLOSam2Pipeline
-        _pipeline = YOLOSam2Pipeline(
-            yolo_weights=yolo_w,
-            sam2_weights=sam2_w,
-            sam2_cfg=sam2_cfg,
-        )
-        print("YOLO + SAM2 pipeline ready.")
+ 
+    sam2_cfg = _find_sam2_cfg()   # ← replaces the hardcoded "sam2_hiera_s.yaml"
+ 
+    from pipeline import YOLOSam2Pipeline
+ 
+    _pipeline = YOLOSam2Pipeline(
+        yolo_weights=yolo_w,
+        sam2_weights=sam2_w,
+        sam2_cfg=sam2_cfg,
+    )
+ 
+    print("✅ YOLO + SAM2 pipeline ready")
     return _pipeline
 
 @app.post("/predict/segment")
@@ -600,6 +649,7 @@ async def predict_segment(
         buffer = io.BytesIO()
         annotated_pil.save(buffer, format="JPEG")
         annotated_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+        buffer.seek(0)
 
         # --------------------------
         # ✅ Upload segmentation image

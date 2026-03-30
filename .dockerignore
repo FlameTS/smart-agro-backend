@@ -3,14 +3,23 @@
 __pycache__
 *.pyc
 .env
+
+# Dev-only directories
 DB/
-sam2_repo/
-weights/
-*.pth
-*.pt
 smartagro_venv/
 venv/
 .venv/
+
+# sam2_repo is cloned fresh in the Dockerfile — don't copy local clone
+sam2_repo/
+
+# IMPORTANT: *.pth and *.pt are NOT excluded here.
+# Model weights must be in the image so the container starts without
+# triggering a 200MB+ download that times out HF's health check.
+# If you cannot include weights (too large for the image), use the
+# hf_hub_download RUN step in the Dockerfile instead (see Option B there).
+
+# Test / docs only
 test_pipeline.py
 SUPABASE_MIGRATION_GUIDE.md
 supabase_schema.sql

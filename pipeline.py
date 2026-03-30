@@ -1,15 +1,11 @@
 import os
-import sys
 import numpy as np
 from PIL import Image
 import torch
 import cv2
 
-# ── Path fix for editable SAM2 install ───────────────────────
-SAM2_REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sam2_repo")
-if SAM2_REPO not in sys.path:
-    sys.path.insert(0, SAM2_REPO)
-
+# SAM2 is installed as a package via `pip install -e sam2_repo` in the Dockerfile.
+# Do NOT manually insert sys.path — it causes import conflicts.
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from ultralytics import YOLO
@@ -29,7 +25,7 @@ class YOLOSam2Pipeline:
         (180, 220, 100),  (220, 180, 100),
     ]
 
-    def __init__(self, yolo_weights, sam2_weights, sam2_cfg, device=None):
+    def __init__(self, yolo_weights: str, sam2_weights: str, sam2_cfg: str, device=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         print(f"[Pipeline] Device: {self.device}")
 
@@ -38,8 +34,13 @@ class YOLOSam2Pipeline:
         print("[Pipeline] YOLO ready.")
 
         print("[Pipeline] Loading SAM2...")
+        # build_sam2 resolves sam2_cfg relative to the sam2 package's own configs/ directory.
+        # For sam2_hiera_small the correct key is "sam2_hiera_s.yaml".
+        # If you get a FileNotFoundError here, check:
+        #   python -c "import sam2; import os; print(os.path.dirname(sam2.__file__))"
+        # and list the configs/ subfolder to find the exact filename.
         sam2_model = build_sam2(sam2_cfg, sam2_weights, device=self.device)
-        self.sam2  = SAM2ImagePredictor(sam2_model)
+        self.sam2 = SAM2ImagePredictor(sam2_model)
         print("[Pipeline] SAM2 ready.")
 
     def run(self, image_input) -> dict:
@@ -71,7 +72,10 @@ class YOLOSam2Pipeline:
             class_name = self.yolo.names[class_id]
             confidence = float(confs[i])
             color      = self.COLORS[class_id % len(self.COLORS)]
-            color_rgb  = (color[2], color[1], color[0])
+            # cv2 uses BGR
+            color_bgr  = (color[2], color[1], color[0])
+            # numpy overlay uses RGB
+            color_rgb  = color
 
             masks, scores, _ = self.sam2.predict(
                 box=box,
@@ -85,20 +89,20 @@ class YOLOSam2Pipeline:
             ).astype(np.uint8)
 
             x1, y1, x2, y2 = map(int, box)
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color_rgb, 2)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color_bgr, 2)
 
             label = f"{class_name.split('___')[-1].replace('_',' ')} {confidence:.0%}"
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(annotated, (x1, y1-th-8), (x1+tw+4, y1), color_rgb, -1)
-            cv2.putText(annotated, label, (x1+2, y1-4),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+            cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 4, y1), color_bgr, -1)
+            cv2.putText(annotated, label, (x1 + 2, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
             detections.append({
                 "class_id":      class_id,
                 "class_name":    class_name,
                 "confidence":    round(confidence, 4),
                 "box":           [x1, y1, x2, y2],
-                "mask_coverage": round(float(best_mask.sum()) / (h*w), 4),
+                "mask_coverage": round(float(best_mask.sum()) / (h * w), 4),
             })
 
         return {
