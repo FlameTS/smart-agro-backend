@@ -507,7 +507,7 @@ def load_pipeline():
             repo_id="Tarman21/smart-agro-model-v1",
             filename="sam2_hiera_small.pt"
         )
-        sam2_cfg = os.path.join(BASE, "sam2_repo", "sam2", "configs", "sam2", "sam2_hiera_s.yaml")
+        sam2_cfg = "sam2_hiera_s.yaml"
 
         from pipeline import YOLOSam2Pipeline
         _pipeline = YOLOSam2Pipeline(
