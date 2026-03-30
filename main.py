@@ -82,6 +82,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+def read_root():
+    return {"status": "healthy", "message": "Smart Agro API is running"}
+
 async def get_current_user(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         # For minimal changes, if we want to allow unauthenticated predictions, we could return None.
